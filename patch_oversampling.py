@@ -1,3 +1,31 @@
+'''
+    Patch Oversampling (Synthesis) with Direct Patch Analysis.
+    Developer: Shu Wang
+    Date: 2020-09-22
+    Version: S2020.09.22 (Version 1.0)
+    File Structure:
+    PatchClearance
+        |-- data                    # original patch folder.
+            |-- negatives           # negative patches.
+            |-- positives           # positive patches.
+            |-- security_patch      # positive patches from NVD.
+        |-- synthesis               # synthetic patch folder.
+            |-- negatives           # corresponding synthetic negative patches.
+            |-- positives           # corresponding synthetic positive patches.
+            |-- security_patch      # corresponding synthetic positive NVD patches.
+        |-- patch_oversampling.py   # main entrance.
+        |-- README.md               # readme file.
+    Usage:
+        python patch_oversampling.py
+    Notes:  # patches = 38,041
+            # patches without verified IF stat   = 15,402 (41%)
+            # patches with one verified IF stat  = 7,379  (19%)
+            # patches with >=2 verified IF stats = 15,260 (40%)
+            # verified IF stats = 135,378
+            # possible patch variants = 1,083,024
+            # restricted patch variants = 37,899
+'''
+
 import os
 import re
 import random
@@ -13,9 +41,9 @@ def main():
     cnt = 0
     for root, ds, fs in os.walk(dataPath):
         for file in fs:
-            # for each file.
             cnt += 1
-            if _DEBUG_ & (cnt != 4): continue
+            if _DEBUG_ & (cnt != 1): continue
+            # for each patch.
             #-------------------------------------------------------------
             filename = os.path.join(root, file).replace('\\', '/')
             if not _DEBUG_: print(cnt, filename)
@@ -23,21 +51,26 @@ def main():
             diffLines, atLines = FindDiffStartPoint(lines)
             ifLines = FindIfStats(lines)
             ifVLines = VerifyIfStats(lines, ifLines, atLines)
-            for ifln in ifVLines:   # for each verified IF stat.
-                for iCh in range(_CHOICE_):   # for each variant.
+            random.shuffle(ifVLines)
+            for ifln in ifVLines[0:2]:   # for each verified IF stat. (restricted)
+                listCh = list(range(_CHOICE_))
+                random.shuffle(listCh)
+                for iCh in listCh[0:1]:   # for each variant. (restricted)
                     newLines = PatchOversampling(lines, atLines, ifln, nChoice=iCh)
                     newLines = ChangeLineNumbers(lines, diffLines, atLines, ifln, newLines)
                     SaveToFile(newLines, filename)
+                    print(ifln, iCh)
             # -------------------------------------------------------------
     return
 
 def ReadPatch(filename):
     '''
-    Read lines from the patch.
-    :param filename:
-    :return:
+    Read lines from a patch file.
+    :param filename: the patch filename (patch + file)
+    :return: lines - the patch contents ['XXX\n', 'XXX\n']
     '''
 
+    # open the file and read lines.
     fp = open(filename, encoding='utf-8', errors='ignore')  # get file point.
     lines = fp.readlines()  # read all lines.
     # numLines = len(lines)   # get the line number.
@@ -52,6 +85,12 @@ def ReadPatch(filename):
     return lines
 
 def FindDiffStartPoint(lines):
+    '''
+    Find the important line numbers for patches.
+    :param lines: the patch contents ['XXX\n', 'XXX\n']
+    :return: diffLines - the line number starts with 'diff --git' [n, n, n]
+             atLines - the line number starts with '@@' [n, n, n]
+    '''
 
     diffLines = [i for i in range(len(lines)) if lines[i].startswith('diff --git')]
     atLines = [i for i in range(len(lines)) if lines[i].startswith('@@ ')]
@@ -62,18 +101,30 @@ def FindDiffStartPoint(lines):
     return diffLines, atLines
 
 def FindIfStats(lines):
+    '''
+    Find the if statements from the patches
+    :param lines: the patch contents ['XXX\n', 'XXX\n']
+    :return: ifLines - the line number starts with [+-]__if_( [n, n, n]
+    '''
 
     # strLines = ''
     # for i in range(len(lines)):
     #     strLines += str(i) + lines[i]
     # print(strLines)
 
-    ifLines = [i for i in range(len(lines)) if len(re.findall(r'if\s*\(', lines[i]))]
+    ifLines = [i for i in range(len(lines)) if len(re.findall(r'[+-]\s*if\s*\(', lines[i]))]
     if _DEBUG_: print('ifLines:', ifLines)
 
     return ifLines
 
 def VerifyIfStats(lines, ifLines, atLines):
+    '''
+    Verify the availability of if statements.
+    :param lines: the patch contents ['XXX\n', 'XXX\n']
+    :param ifLines: the line number contains if statements. [n, n, n]
+    :param atLines: the line number starts with '@@' [n, n, n]
+    :return: ifVLinesFinal - the line number contains verified if statements [n, n, n]
+    '''
 
     # if stats should be in diff code.
     ifVLines = [ln for ln in ifLines if ln > atLines[0]]
@@ -126,11 +177,11 @@ def VerifyIfStats(lines, ifLines, atLines):
 def PatchOversampling(lines, atLines, ifln, nChoice=-1):
     '''
     Patch oversampling with different options.
-    :param lines:
-    :param atLines:
-    :param ifln:
-    :param nChoice:
-    :return:
+    :param lines: the patch contents ['XXX\n', 'XXX\n']
+    :param atLines: atLines - the line number starts with '@@' [n, n, n]
+    :param ifln: the line number that needs to be changed. n
+    :param nChoice: the options to change the patch. n in [0,7]
+    :return: the synthetic patch contents ['XXX\n', 'XXX\n']
     '''
 
     # get the font part.
@@ -212,10 +263,11 @@ def PatchOversampling(lines, atLines, ifln, nChoice=-1):
     newLines.extend(lines[lnEnd:])
     # print(newLines)
 
-    strLines = ''
-    for i in range(len(newLines)):
-        strLines += newLines[i]
-    if _DEBUG_: print(strLines)
+    if _DEBUG_:
+        strLines = ''
+        for i in range(len(newLines)):
+            strLines += newLines[i]
+        print(strLines)
     if _DEBUG_: print(len(lines), len(newLines), len(newLines)-len(lines))
 
     return newLines
@@ -223,12 +275,12 @@ def PatchOversampling(lines, atLines, ifln, nChoice=-1):
 def ChangeLineNumbers(lines, diffLines, atLines, ifln, newLines):
     '''
     Change the corresponding line numbers in the @-lines.
-    :param lines:
-    :param diffLines:
-    :param atLines:
-    :param ifln:
-    :param newLines:
-    :return:
+    :param lines: the patch contents ['XXX\n', 'XXX\n']
+    :param diffLines: diffLines - the line number starts with 'diff --git' [n, n, n]
+    :param atLines: atLines - the line number starts with '@@' [n, n, n]
+    :param ifln: the line number that needs to be changed. n
+    :param newLines: the synthetic patch contents ['XXX\n', 'XXX\n']
+    :return: newLines - the synthetic patch contents ['XXX\n', 'XXX\n']
     '''
 
     # count the number of line changed.
@@ -274,13 +326,19 @@ def ChangeLineNumbers(lines, diffLines, atLines, ifln, newLines):
     return newLines
 
 def SaveToFile(newLines, filename):
+    '''
+    Save the synthetic patch into file.
+    :param newLines: the synthetic patch contents ['XXX\n', 'XXX\n']
+    :param filename: the filename of the original patch. (path, file)
+    :return: the save path for the synthetic patch. (path, file)
+    '''
 
     # sparse the original filename.
     (path, file) = os.path.split(filename)
     # print(path, file)
 
     # construct new path.
-    newPath = path.replace(dataPath, syntPath)
+    newPath = (path+'/').replace(dataPath, syntPath)
     # print(newPath)
     if not os.path.exists(newPath):
         os.makedirs(newPath)
